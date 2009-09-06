@@ -1,0 +1,292 @@
+http://hiveminder.com/ is a task tracker in progress, which includes a
+limited API.  The key features from my perspective are task
+dependencies and tags, and how they can be used to hide things and
+make task lists less overwhelming.
+
+[eichin:20061003T0534-04]
+
+spent about 4 hours poking around at pycurl (pycurl assumes too much
+that you know how the underlying curl features work), but did end up
+with a todo.py that logs in and lists my tasks....
+
+suggest to the pycurl author (maybe offer patches) that all of the
+variables become const-functions *just* so that they can have
+docstrings hanging off of them!
+
+[eichin:20061006T0446-04]
+
+split hm_talker and hm_config (the tester function for new_config is a
+bit of a leak, but it works.)  Started fleshing out a bunch of
+documented functions.
+
+[eichin:20061014T0503-04]
+
+Yay, jesse added 
+            depended_on_by_count: 2
+            depended_on_by_ids: 38157	38158
+            depended_on_by_summaries: move thok email	move swat email
+
+Sadly, syck falls apart; use ctypes instead?  Sadly, libsyck0-dev only
+provides a static lib; the only dynamic lib is the one that is already
+the parser.  electric fence doesn't catch anything either.
+
+Rebuilding syck.so with debugging (after purging the PHP references
+from the build :-) and installing python-dbg, and running "./todo.py
+listid 7AM" to test the bad bit of code got this:
+
+ #0  0x00000000 in ?? ()
+ #1  0xb7cb5e83 in syck_hdlr_get_anchor (p=0x82217c0, a=0x81fcb18 "1") at handler.c:108
+    108	                    n = (p->bad_anchor_handler)( p, a );
+ 
+ #2  0xb7cb14d0 in syckparse (parser=0x82217c0) at gram.y:192
+ #3  0xb7cafacd in syck_parse (p=0x82217c0) at syck.c:497
+ #4  0xb7cadf81 in py_syck_load (self=0x0, args=0x0) at pyext.c:397
+ #5  0x080b63c7 in PyEval_EvalFrame (f=0x81c0a2c) at ../Python/ceval.c:3563
+ #6  0x080b713b in PyEval_EvalFrame (f=0x81f8d44) at ../Python/ceval.c:3645
+ #7  0x080b713b in PyEval_EvalFrame (f=0x815cac4) at ../Python/ceval.c:3645
+ #8  0x080b781f in PyEval_EvalCodeEx (co=0xb7cf78a0, globals=0xb7d58824, locals=0x0, args=0xb7cc7318, argcount=2, kws=0x0, kwcount=0, 
+     defs=0x0, defcount=0, closure=0x0) at ../Python/ceval.c:2736
+ #9  0x080fc13d in function_call (func=0xb7acf72c, arg=0xb7cc730c, kw=0x0) at ../Objects/funcobject.c:548
+ #10 0x0805946c in PyObject_Call (func=0x81f9cf8, arg=0x0, kw=0x0) at ../Objects/abstract.c:1795
+ #11 0x080b4bba in PyEval_EvalFrame (f=0x81d5d74) at ../Python/ceval.c:3840
+ #12 0x080b713b in PyEval_EvalFrame (f=0x8142f0c) at ../Python/ceval.c:3645
+ #13 0x080b781f in PyEval_EvalCodeEx (co=0xb7cf7a20, globals=0xb7d58824, locals=0xb7d58824, args=0x0, argcount=0, kws=0x0, kwcount=0, 
+     defs=0x0, defcount=0, closure=0x0) at ../Python/ceval.c:2736
+ #14 0x080b7a65 in PyEval_EvalCode (co=0x0, globals=0x0, locals=0x0) at ../Python/ceval.c:484
+ #15 0x080d95cc in PyRun_FileExFlags (fp=0x813e008, filename=0xbfe1bcf4 "./todo.py", start=0, globals=0x0, locals=0x0, closeit=1, 
+     flags=0xbfe1ba34) at ../Python/pythonrun.c:1265
+ #16 0x080d986c in PyRun_SimpleFileExFlags (fp=<value optimized out>, filename=0xbfe1bcf4 "./todo.py", closeit=1, flags=0xbfe1ba34)
+     at ../Python/pythonrun.c:860
+ #17 0x08055b33 in Py_Main (argc=3, argv=0xbfe1bad4) at ../Modules/main.c:493
+ #18 0xb7d95ea2 in __libc_start_main () from /lib/tls/i686/cmov/libc.so.6
+ #19 0x08054fa1 in _start () at ../sysdeps/i386/elf/start.S:119
+
+and there simply is no bad_anchor_handler, so it all catches fire.
+
+Oddly, setting up the handler:
+    syck_parser_bad_anchor_handler( parser, py_syck_error_handler); /* [eichin:20061014T0538-04] */
+
+just changes the quality of the traceback - we don't get to see the
+error because it goes is screwing up the cleanup too...
+
+ #0  0xb7e88309 in free () from /lib/tls/i686/cmov/libc.so.6
+ #1  0xb7d5299f in syck_free_node (n=0xb7b719dc) at node.c:39
+ #2  0xb7d5338d in syck_st_free_nodes (key=0x81fcb18 "88··°Ë\037\b\020", n=0xb7f51304, arg=0x0) at syck.c:206
+ #3  0xb7d54430 in st_foreach (table=0x81f9cf8, func=0xb7d5336b <syck_st_free_nodes>, arg=0x0) at syck_st.c:495
+ #4  0xb7d533ff in syck_st_free (p=0x82217c0) at syck.c:226
+ #5  0xb7d53601 in syck_free_parser (p=0x82217c0) at syck.c:247
+ #6  0xb7d51fc0 in py_syck_load (self=0x0, args=0xb7f51304) at pyext.c:406
+
+Adding a forced print, and then looking at the given line and offset,
+it turns out not to handle *1 syntax -- force-replacing it out causes
+the parse to succeed...
+
+print syck.load(res.replace('        _current_user: *1',''))
+
+Will complain and try and work around it... but upstream (rubyforge
+CVS) stopped at 0.55, and http://code.whytheluckystiff.net/svn/syck/trunk/ext/
+is notably *missing* the python branch...
+
+http://bugs.debian.org/cgi-bin/pkgreport.cgi?pkg=python-syck;dist=unstable
+
+lists this bug -- with no analysis, but a good short test case:
+
+ python ./syck-deb-293251.py
+ py_syck_error_handler: 2, 5, b['stuff', 'stuff']
+ Exception exceptions.TypeError: (2, 5, 'b') in 'garbage collection' ignored
+ Fatal Python error: unexpected exception during garbage collection
+ Aborted
+
+among a set of 500-day-old bugs from possibly the only person to try
+it, and a reference to a better implementation:
+
+ http://redhanded.hobix.com/inspect/languageHoppingWithYaml.html
+ http://trac.xitology.org/pysyck/
+ http://pyyaml.org/
+ http://pyyaml.org/wiki/PyYAML
+
+This at least doesn't crash (it *can't* using the pure python version,
+but there pyrex to call libyaml... wonder if that should use ctypes)
+but it isn't compatible in other ways:
+
+yaml.constructor.ConstructorError: could not determine a constructor for the tag 'tag:yaml.org,2002:perl/hash:Jifty::Result'
+  in "<string>", line 2, column 8:
+    fnord: !!perl/hash:Jifty::Result
+
+[eichin:20071003T2249-04]
+
+Hackathon time! localfile:hive-braindump.py has a simple commandline
+client that assumes you already have {{{~/.hiveminder}}} from running
+{{{todo.pl}}} (or you create one, with a line starting with {{{sid:}}}
+and followed by your {{{JIFTY_SID_HIVEMINDER}}} cookie value.)
+
+It uses the {{{webservices}}} interface rather than the direct REST
+one... but since that path actually *works* I can move forward on
+{{{m-x braindump}}} again :-)
+
+[eichin:20071207T2258-05]
+
+Since I've been camped out on the EEEpc at breakfast and lunch times
+lately, often in places without net, I put some trivial queuing into
+localfile:hive-braindump.py - if it doesn't see net, or an attempt to
+post fails, it queues up the item until next time.  There's a
+{{{--flush-queue}}} option that might be useful in a personal
+net-start script.
+
+Still haven't gotten this hooked into emacs any better than running it
+in shell mode; mostly that's blocked on not having found a sane way to
+list all tags, for a completion-table in the prompter (and without
+that, it's boring, running it in an existing emacs shell buffer is
+actually more useful.)
+
+[eichin:20071220T0025-05]
+
+Jesse mentioned that one of the JSON interfaces had been fixed, so I
+dug up a test, and sure enough it works.  Then I looked more closely
+and noticed that all three paths have more response values than they
+used to... so: localfile:hive-braindump.py now prints the encoded ids
+of the just-created tasks, so you can conveniently {{{but-first}}} or
+{{{and-then}}} them.
+
+Err, except for the conveniently part - as the FAQ points out, you
+can't actually do those operations over the braindump protocol.
+(Requested.) 
+
+[eichin:20071221T0113-05]
+
+I'll have to dig a bit to be sure, but as of today I think all of my
+open API bugs have been fixed, yay!  In particular:
+
+{{{curl -F key=value -b JIFTY_SID_HIVEMINDER=... http://hiveminder.com/=/action/BTDT.Action.TaskSearch.json}}}
+
+works now - multiple {{{-F}}} arguments narrow the search, and even
+with just {{{owner}}} it successfully returns large payloads. I'll
+have to combine this with the STFL curses-UI bits I learned for
+MeterStone and do a quick tree-browser for tasks...
+
+[eichin:20071223T0205-05]
+
+Added {{{--group}}} to localfile:hive-braindump.py even though it's
+just a specialization of {{{--tag}}}, now that I'm giving groups
+another try.
+
+[eichin:20071225T0238-05]
+
+Progress on {{{vim}}} support (which turned out to merely be a
+highlighting mode for {{{todo.pl}}} output) inspired me to apply some
+torque to the {{{emacs}}} mode.  The blocking task (#8239) was to
+simply get a list of tags out, *somehow*.  What I realized recently
+was that tag completion was important, but didn't have to be perfect;
+if the only way to get tags was expensive, we'd just have to keep a
+cache.  Thus we now have localfile:hive-expensive-tags.py which uses
+{{{BTDT.Action.TaskSearch.xml}}} to get *all* of your tasks, and
+discard everything but the tags themselves...
+
+When I run it, I get 90 tags, at the cost downloading 800K of XML; it
+takes about 6 seconds, from here.  This feels... unecological :-) and
+I've erred in favor of not doing it at all, over "doing it wrong". I
+think I'll manually stash the value every so often, rather than
+automatically invoke this, until someday when newer APIs appear that
+let me get just the tags out.
+
+Thus, {{{hive-expensive-tags.py --elisp > ~/.hiveminder_tags.el}}}
+should suffice for now, and I can move on with the rest of the
+interface...
+
+[eichin:20071227T0124-05]
+
+After 20+ years, emacslisp is still kind of painful, but sometime
+recently it grew a {{{completing-read-multiple}}} function which turns
+out to do most of the prompting work I wanted for {{{m-x braindump}}}.
+That's enough for tonight, I'll throw a {{{call-process}}} in tomorrow
+that actually calls the python code...
+
+[eichin:20071228T0040-05]
+
+This has mostly made me want to go look at {{{pymacs}}} again, but at
+least it's done.  localfile:hive.el  provides a simple {{{m-x hive-braindump}}}
+that prompts (with completion) for tags (comma separated) and then a body, then
+calls out to localfile:hive-braindump.py to actually do the work.
+
+Next step is to do a tree-browser, but much as I'd like to have it
+inside emacs, that's going to be painful enough that I'm going to do
+it in python first (using STFL for a curses interface.)
+
+Other next step is to try using one of the new JSON interfaces to get
+the tag list on the fly.  Probably also want to come up with some way
+of currying {{{hive-braindump}}} itself to make it easier to define
+macros and context-sensitive wrappers (though half the value of an
+emacs hook is to have yet another place to capture ideas that *aren't*
+in your current context, so that might not be as useful as it sounds
+at first.
+
+[eichin:20080104T2232-05]
+
+New API! {{{/=/search/BTDT.Model.Task/tags.xml}}} (or {{{.json}}} of
+course) produces a full set of tags in about 2 seconds for my
+relatively large tag set.  So, localfile:hive-cheap-tags.py should
+replace any use of the expensive version; for starters,
+{{{hive-cheap-tags.py --elisp > ~/.hiveminder_tags.el}}} will work
+with localfile:hive.el until I get around to having the elisp invoke
+it more directly...
+
+[eichin:20080204T0019-05]
+
+Hadn't poked at localfile:todo.py in a while (it's mostly a protocol
+testbench for me, I actually want commandline tools that do entirely
+different things) but I got a simple "add comment" implementation in
+the mail from firstclown; I tweaked it a bit, and then noticed that
+{{{handle_response}}} hasn't worked in a while, so I fixed that as
+well.  I should really set up a test account with standard test-tasks
+for this so I can actually do proper "first do no harm" development :-)
+
+Footnotes:
+  * firstclown blog http://www.firstclown.us
+
+[eichin:20080207T0227-05]
+
+More cleanups (still working my way through firstclown's changes), and
+simple implementations of
+ * {{{upload}}}
+ * {{{hide}}} (until date)
+ * {{{edit}}} (change the task summary itself)
+
+Also general cleanup of the {{{call}}} method, which should also make
+it more useful when imported as a module.
+
+As a user, I just discovered that there was already a working
+{{{done}}} here, which is more useful now that {{{braindump}}} prints
+out the task-id - {{{todo.py done AXJY}}} works...
+
+Footnotes:
+  * firstclown blog http://www.firstclown.us
+  * latest todo.py localfile:todo.py
+  * latest braindump localfile:hive-braindump.py
+
+[eichin:20080219T1912-05]
+
+Most of the work on localfile:todo.py has been about matching the
+existing {{{todo.pl}}} code, or existing features in the UI.  Finally,
+my first "hiveminder feature that can only be done through new code":
+
+{{{for taskid in $(todo.py --task-ids-only --tag postmerge list); do todo.py but_first $taskid AV68; done}}}
+
+{{{postmerge}}} is a tag (set with braindump) on a bunch of tasks that
+can't be done until task #AV68 (identifying a major code merge) is
+completed.  As far as I can tell, you can't do this with braindump,
+bulk update, or task review at all...  Basically, this is a "defer
+until next release" software-development task-management button :-)
+
+This suggests that a few other commands should return task ids in
+parsable form (like localfile:hive-braindump.py itself, which
+currently just reports them coincidentally in the status message and
+would need to parse that.)
+
+[eichin:20080224T2046-05]
+
+Minor fixes to localfile:todo.py today;
+  * broken return-value handling in {{{but_first}}}
+  * {{{list}}} didn't report errors ({{{todo.pl}}} has the same bug, patch sent upstream)
+  * improved {{{sid}}}-cookie handling
+
+(I'm using defer-until-task enough that I should make it an actual subcommand :-)
